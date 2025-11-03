@@ -1,0 +1,186 @@
+// File: lwjgl3/build.gradle — Java 21 통일, core/assets 기준, ANGLE 토글, 암묵 의존 제거
+
+buildscript {
+  repositories {
+    gradlePluginPortal()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "io.github.fourlastor:construo:2.0.2"
+    // Graal Native 쓸 때만
+    if (enableGraalNative == 'true') {
+      // JDK 21 대응 0.10.x 권장
+      classpath "org.graalvm.buildtools.native:org.graalvm.buildtools.native.gradle.plugin:0.10.2"
+    }
+  }
+}
+
+plugins { id "application" }
+apply plugin: 'io.github.fourlastor.construo'
+
+import io.github.fourlastor.construo.Target
+
+repositories { mavenCentral() }
+
+application {
+  mainClass = 'com.mygdx.game.DesktopLauncher'
+  applicationDefaultJvmArgs = [
+    "-Dfile.encoding=UTF-8",
+    "-Dorg.lwjgl.util.Debug=true",
+    "-Dorg.lwjgl.util.DebugLoader=true"
+  ]
+}
+
+eclipse.project.name = appName + '-lwjgl3'
+
+// ✳️ Java 21 통일
+java {
+  sourceCompatibility = JavaVersion.VERSION_21
+  targetCompatibility = JavaVersion.VERSION_21
+  toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+tasks.withType(JavaCompile).configureEach {
+  options.release = 21
+  options.encoding = 'UTF-8'
+  options.compilerArgs += ['-Xlint:deprecation','-Xlint:unchecked']
+}
+
+dependencies {
+  implementation "com.badlogicgames.gdx-controllers:gdx-controllers-desktop:$gdxControllersVersion"
+  implementation "com.badlogicgames.gdx:gdx-backend-lwjgl3:$gdxVersion"
+  implementation "com.badlogicgames.gdx:gdx-box2d-platform:$gdxVersion:natives-desktop"
+  implementation "com.badlogicgames.gdx:gdx-lwjgl3-angle:$gdxVersion"
+  implementation "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop"
+
+  implementation "com.badlogicgames.gdx:gdx-freetype:$gdxVersion"
+  implementation "com.badlogicgames.gdx:gdx-freetype-platform:$gdxVersion:natives-desktop"
+
+  implementation project(':core')
+
+  if (enableGraalNative == 'true') {
+    implementation "io.github.berstanio:gdx-svmhelper-backend-lwjgl3:$graalHelperVersion"
+    implementation "io.github.berstanio:gdx-svmhelper-extension-box2d:$graalHelperVersion"
+  }
+}
+
+def os = System.properties['os.name'].toLowerCase()
+def safeTmp = os.contains('win') ? 'C:/gdx_tmp' : "${buildDir}/tmp_lwjgl"
+
+// 🔗 core의 asset-list 태스크를 참조 (여기서 새로 만들지 않음)
+def coreGen = project(':core').tasks.named('generateAssetList')
+
+// 🧹 혹시 이 모듈에 generateAssetList가 있다면 비활성화(암묵 의존 제거)
+tasks.matching { it.name == "generateAssetList" }.configureEach { enabled = false }
+
+// 🎯 리소스/패키징/실행은 coreGen 이후로 보장
+tasks.named('processResources') { dependsOn(coreGen) }
+tasks.named('jar')               { dependsOn(coreGen) }
+
+tasks.named('run', JavaExec) {
+  javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+  dependsOn(coreGen)
+
+  doFirst { file(safeTmp).mkdirs() }
+
+  // ★ WD = core/assets (상대경로 로딩 일관화)
+  workingDir = project(':core').file('assets')
+
+  jvmArgs += "-Djava.io.tmpdir=${safeTmp}"
+  jvmArgs += "-Dfile.encoding=UTF-8"
+  jvmArgs += "-Dorg.lwjgl.util.Debug=true"
+  jvmArgs += "-Dorg.lwjgl.util.DebugLoader=true"
+
+  // gradlew :lwjgl3:run -PuseAngle=true
+  if (project.hasProperty('useAngle') && project.property('useAngle') == 'true') {
+    jvmArgs += "-Dorg.lwjgl.glfw.libname=glfw_angle"
+  }
+  if (os.contains('mac')) jvmArgs += "-XstartOnFirstThread"
+}
+
+jar {
+  archiveFileName.set("${appName}-${projectVersion}.jar")
+  duplicatesStrategy(DuplicatesStrategy.EXCLUDE)
+  dependsOn configurations.runtimeClasspath
+
+  from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+  exclude('META-INF/INDEX.LIST','META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA')
+
+  manifest {
+    attributes(
+      'Main-Class': 'com.mygdx.game.DesktopLauncher',
+      'Enable-Native-Access': 'ALL-UNNAMED'
+    )
+  }
+  doLast { file(archiveFile).setExecutable(true, false) }
+}
+
+// ⛏ OS별 슬림 JAR (네이티브 제외용 필터 유지)
+tasks.register("jarMac") {
+  dependsOn("jar"); group("build")
+  jar.archiveFileName.set("${appName}-${projectVersion}-mac.jar")
+  jar.exclude("windows/x86/**","windows/x64/**","linux/arm32/**","linux/arm64/**","linux/x64/**","**/*.dll","**/*.so",
+    'META-INF/INDEX.LIST','META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA')
+}
+tasks.register("jarLinux") {
+  dependsOn("jar"); group("build")
+  jar.archiveFileName.set("${appName}-${projectVersion}-linux.jar")
+  jar.exclude("windows/x86/**","windows/x64/**","macos/arm64/**","macos/x64/**","**/*.dll","**/*.dylib",
+    'META-INF/INDEX.LIST','META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA')
+}
+tasks.register("jarWin") {
+  dependsOn("jar"); group("build")
+  jar.archiveFileName.set("${appName}-${projectVersion}-win.jar")
+  jar.exclude("macos/arm64/**","macos/x64/**","linux/arm32/**","linux/arm64/**","linux/x64/**","**/*.dylib","**/*.so",
+    'META-INF/INDEX.LIST','META-INF/*.SF','META-INF/*.DSA','META-INF/*.RSA')
+}
+
+// 📦 Construo: 배포용 JDK도 21로 승격 (예시는 Temurin 21.0.5+11)
+construo {
+  name.set(appName)
+  humanName.set(appName)
+  targets.configure {
+    register("linuxX64", Target.Linux) {
+      architecture.set(Target.Architecture.X86_64)
+      jdkUrl.set("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_linux_hotspot_21.0.5_11.tar.gz")
+    }
+    register("macM1", Target.MacOs) {
+      architecture.set(Target.Architecture.AARCH64)
+      jdkUrl.set("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz")
+      identifier.set("com.example.thedream." + appName)
+      macIcon.set(project.file("icons/logo.icns"))
+    }
+    register("macX64", Target.MacOs) {
+      architecture.set(Target.Architecture.X86_64)
+      jdkUrl.set("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_mac_hotspot_21.0.5_11.tar.gz")
+      identifier.set("com.example.thedream." + appName)
+      macIcon.set(project.file("icons/logo.icns"))
+    }
+    register("winX64", Target.Windows) {
+      architecture.set(Target.Architecture.X86_64)
+      icon.set(project.file("icons/logo.png"))
+      jdkUrl.set("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip")
+    }
+  }
+}
+
+tasks.register('dist') { dependsOn 'jar' }
+
+distributions {
+  main {
+    contents {
+      into('libs') {
+        project.configurations.runtimeClasspath.files.findAll { file ->
+          file.getName() != project.tasks.jar.outputs.files.singleFile.name
+        }.each { file -> exclude file.name }
+      }
+    }
+  }
+}
+
+startScripts.dependsOn(':lwjgl3:jar')
+startScripts.classpath = files(project.tasks.jar.outputs.files)
+
+// Graal Native
+if (enableGraalNative == 'true') {
+  apply from: file("nativeimage.gradle")
+}

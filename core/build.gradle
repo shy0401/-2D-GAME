@@ -1,0 +1,73 @@
+plugins {
+  id 'java-library'
+  id 'eclipse'
+  id 'idea'
+}
+
+repositories { mavenCentral() }
+
+java {
+  // JDK 21 통일
+  toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+tasks.withType(JavaCompile).configureEach {
+  options.release = 21
+  options.encoding = 'UTF-8'
+  options.incremental = true
+}
+
+dependencies {
+  api "com.badlogicgames.gdx:gdx:$gdxVersion"
+  api "com.badlogicgames.gdx:gdx-freetype:$gdxVersion"
+  api "com.badlogicgames.gdx:gdx-box2d:$gdxVersion"
+  api "com.badlogicgames.gdx-controllers:gdx-controllers-core:$gdxControllersVersion"
+}
+
+eclipse.project.name = "${appName}-core"
+
+// 📁 core/assets를 리소스 루트로 고정
+def assetsDir = layout.projectDirectory.dir("assets")
+
+// ⚠️ 빌드 생성물은 build/generated-resources/assetlist 로 분리(Gradle 추적 안전)
+def genResDir = layout.buildDirectory.dir("generated-resources/assetlist")
+def assetListFile = genResDir.map { it.file("assetlist.txt") }
+
+// 🧩 generateAssetList: 이미 있으면 재사용, 없으면 등록 (중복 등록 에러 방지)
+def hasGen = tasks.names.contains('generateAssetList')
+def coreGen = hasGen
+  ? tasks.named('generateAssetList')
+  : tasks.register('generateAssetList') {
+  group = "build setup"
+  description = "Scans core/assets and writes assetlist.txt into build/generated-resources/assetlist."
+
+  inputs.dir(assetsDir)       // 입력: assets 전체
+  outputs.file(assetListFile) // 출력: assetlist.txt
+
+  doLast {
+    def outFile = assetListFile.get().asFile
+    outFile.parentFile.mkdirs()
+    outFile.text = ""
+    // assets 트리 순회
+    assetsDir.get().asFileTree.visit { f ->
+      if (!f.isDirectory()) {
+        outFile << f.relativePath.getPathString().replace('\\','/') + "\n"
+      }
+    }
+    logger.lifecycle("[core] wrote ${outFile} (${outFile.length()} bytes)")
+  }
+}
+
+// 소스셋(리소스)에 core/assets 등록
+sourceSets {
+  main {
+    resources {
+      srcDirs = [ assetsDir ]
+    }
+  }
+}
+
+// 리소스 처리 시: 생성된 리소스 포함 + 의존성 보장
+tasks.named('processResources') {
+  from(genResDir)          // Provider<Directory> 안전 연결
+  dependsOn(coreGen)       // generateAssetList 이후에 수행
+}

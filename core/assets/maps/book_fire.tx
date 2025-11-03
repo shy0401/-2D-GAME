@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template>
+ <tileset firstgid="1" source="../book_fire.tsx"/>
+ <object name="book_fire" gid="1" width="32" height="32">
+  <properties>
+   <property name="Type" value="string"/>
+  </properties>
+ </object>
+</template>

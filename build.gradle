@@ -1,0 +1,70 @@
+plugins {
+  id 'eclipse'
+  id 'idea'
+}
+
+ext {
+  appName = 'TheDream'
+
+  // ★ 기본 assets 폴더: 프로젝트 루트/assets (윈도우/맥 공용, 절대경로로 평가됨)
+  assetsDir  = file("${rootDir}/assets")
+  assetsPath = assetsDir.absolutePath
+}
+
+allprojects {
+  repositories { mavenCentral() }
+
+  // IntelliJ IDEA 빌드 출력 경로 고정
+  idea {
+    module {
+      outputDir     file("$buildDir/classes/java/main")
+      testOutputDir file("$buildDir/classes/java/test")
+    }
+  }
+}
+
+subprojects {
+  apply plugin: 'java-library'
+
+  group   = 'com.mygdx'
+  version = project.findProperty('projectVersion') ?: '1.0.0'
+
+  java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+  }
+
+  tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.incremental = true
+  }
+
+// === assets.txt 자동 생성 (루트의 assetsDir 사용) ===
+  File assetsDir = rootProject.ext.assetsDir
+  File assetsTxt = new File(assetsDir, "assets.txt")
+
+  if (!tasks.findByName('generateAssetList')) {
+    tasks.register('generateAssetList') {
+      inputs.dir(assetsDir)
+      outputs.file(assetsTxt)
+      doLast {
+        if (!assetsDir.exists()) {
+          logger.lifecycle("No assets dir found at: ${assetsDir}")
+          return
+        }
+        assetsTxt.parentFile.mkdirs()
+        def rel = { File f -> assetsDir.toPath().relativize(f.toPath()).toString().replace('\\','/') }
+        def files = fileTree(assetsDir).matching { include '**/*' }.files.findAll { it.isFile() }
+        files.sort { a, b -> rel(a) <=> rel(b) }
+        assetsTxt.text = files.collect { rel(it) }.join('\n') + '\n'
+        logger.lifecycle("Generated assets.txt with ${files.size()} entries")
+      }
+    }
+  }
+
+  tasks.matching { it.name == 'processResources' }.configureEach {
+    dependsOn(tasks.named('generateAssetList'))
+  }
+}
+
+// 편의: 다른 모듈에서 rootProject.ext.assetsDir / assetsPath 로 참조
+eclipse.project.name = "${ext.appName}-parent"
